@@ -956,7 +956,7 @@ The testbench generates a VCD waveform that we can use to observe graphically
 using a VCD waveform viewer like gtkwave:
 
 .. image:: sum8_sim.png
-   :width: 70%
+   :width: 100%
    :alt: Simulation waveform for the sum8 circuit.
 
 We can also synthesize a version of this testbench and the sum8 circuit
@@ -966,7 +966,7 @@ with another circuit that acts as a logic analyzer (ILA) then then
 run and observe this actually running on an FPGA and capture its output:
 
 .. image:: sum8_ila.png
-   :width: 70%
+   :width: 100%
    :alt: Logic analyzer trace capture for the sum8 circuit.
 
 Reassuringly, the actual circuit behaves as predicted by the Cava model
