@@ -180,18 +180,3 @@ Notation "[ x ]" := (Pair x Unit) : circuit_type_scope.
 Notation "[ x ; y ; .. ; z ]" := (Pair x (Pair y .. (Pair z Unit) ..)) : circuit_type_scope.
 Notation "x ** y" := (Pair x y)(at level 60, right associativity) : circuit_type_scope.
 Notation "x ++ y" := (absorb_any x y) (at level 60, right associativity): circuit_type_scope.
-
-(* `denote_type` as a relation (but living in `Type` instead of `Prop`
-   so that we can compute on it.
-   Similar to Logic.eq, but a separate definition, because we don't want to mark Logic.eq
-   as a typeclass. *)
-Inductive denote_rel(t: type): Type -> Type :=
-  mk_denote_rel: denote_rel t (denote_type t).
-
-Existing Class denote_rel.
-Existing Instance mk_denote_rel.
-
-Definition cast{x X}(dx: denote_rel x X): X -> denote_type x :=
-  match dx with
-  | mk_denote_rel _ => id
-  end.

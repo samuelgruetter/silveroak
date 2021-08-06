@@ -35,12 +35,12 @@ Section Vars.
 
   | Let: forall {x y z s1 s2}, Circuit s1 [] x -> (var x -> Circuit s2 y z) -> Circuit (s1++s2) y z
   (* slightly different fomualtion, but equivalent to loop delay *)
-  | LetDelayRaw : forall {x y z s1 s2}, denote_type x
+  | LetDelay : forall {x y z s1 s2}, denote_type x
     -> (var x -> Circuit s1 [] x)
     -> (var x -> Circuit s2 y z)
     -> Circuit (x ++ s1 ++ s2) y z
 
-  | DelayRaw: forall {x}, denote_type x -> Circuit x [x] x
+  | Delay: forall {x}, denote_type x -> Circuit x [x] x
 
   | ElimBool: forall {s1 s2 x},
     Circuit [] [] Bit
@@ -52,7 +52,7 @@ Section Vars.
     -> var (x**y)
     -> Circuit s [] z
 
-  | ConstantRaw: forall {x}, denote_type x -> Circuit [] [] x
+  | Constant: forall {x}, denote_type x -> Circuit [] [] x
   | MakeTuple: forall {s1 s2 x y}, Circuit s1 [] x
     -> Circuit s2 [] y
     -> Circuit (s1++s2) [] (x**y)
@@ -62,25 +62,6 @@ Section Vars.
   | TernaryOp : forall {x y z r}, TernaryPrim x y z r -> var x -> var y -> var z -> Circuit [] [] r
   .
 End Vars.
-
-Section SmartConstructors.
-  Context {var: tvar}.
-
-  Definition LetDelay{x X y z s1 s2}{dx: denote_rel x X}(v: X)
-    (rhs: var x -> Circuit s1 [] x) (body: var x -> Circuit s2 y z) : Circuit (x ++ s1 ++ s2) y z :=
-    LetDelayRaw (cast dx v) rhs body.
-
-  Definition Delay{x X}{dx: denote_rel x X}(v: X): Circuit x [x] x := DelayRaw (cast dx v).
-
-  Definition Constant{x X}{dx: denote_rel x X}(v: X): Circuit [] [] x := ConstantRaw (cast dx v).
-End SmartConstructors.
-
-Section TypecheckingTests.
-  Context {var: tvar}.
-  Example sample_const_1: Circuit [] [] (BitVec 32) := Constant 1.
-  Example sample_const_2: Circuit [] [] (BitVec 32 ** BitVec 6) := Constant (1, 2).
-  Example sample_const_3: Circuit [] [] ((BitVec 32 ** BitVec 6) ** Bit) := Constant (1, 2, true).
-End TypecheckingTests.
 
 Declare Scope expr_scope.
 Declare Custom Entry expr.
@@ -139,6 +120,7 @@ End ExprNotations.
 
 Section Var.
   Context {var : tvar}.
+  Definition val_of t : denote_type t -> denote_type t := id.
 
   Class bitlike x :=
   { eq : var x -> var x -> Circuit [] [] Bit
@@ -167,6 +149,10 @@ Section RegressionTests.
   Import ExprNotations.
 
   Context {var : tvar}.
+
+  Example sample_const_1 := Constant (val_of (BitVec 32) 1).
+  Example sample_const_2 := Constant (val_of (BitVec 32 ** BitVec 6) (1, 2)).
+  Example sample_const_3 := Constant (val_of ((BitVec 32 ** BitVec 6) ** Bit) (1, 2, true)).
 
   Definition fork2 {A} : Circuit [] [A] (A ** A) := {{
     fun a => ( a, a)

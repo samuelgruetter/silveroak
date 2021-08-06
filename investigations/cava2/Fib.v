@@ -37,9 +37,9 @@ Section Var.
 
   Definition fibonacci {sz: nat}: Circuit (BitVec sz ** BitVec sz) [] (BitVec sz) := {{
     let/delay r1 :=
-      let r2 := delay r1 initially (2^(N.of_nat sz)-1) in
+      let r2 := delay r1 initially (val_of (BitVec sz) (2^(N.of_nat sz)-1)) in
       r1 + r2
-      initially 1 in
+      initially (val_of (BitVec sz) 1) in
     r1
   }}.
 End Var.
@@ -74,8 +74,7 @@ Lemma fibonacci_step sz state input :
     let sum := (fst state + snd state) mod (2 ^ N.of_nat sz) in
     (sum, fst state, sum).
 Proof.
-  intros.
-  cbn [step fibonacci Bv2N Vector.of_list Primitives.binary_semantics Constant Delay LetDelay cast].
+  intros; cbn [step fibonacci Bv2N Vector.of_list Primitives.binary_semantics ].
   repeat (destruct_pair_let; cbn [split_absorbed_denotation combine_absorbed_denotation List.app absorb_any fst snd ]).
   reflexivity.
 Qed.

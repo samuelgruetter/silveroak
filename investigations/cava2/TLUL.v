@@ -102,17 +102,17 @@ Section Var.
   (*   Get            = 3'h 4 *)
   (* } tl_a_op_e; *)
   Definition tl_a_op_e      := Vec Bit 3.
-  Definition PutFullData    : Circuit [] [] tl_a_op_e := Constant 0.
-  Definition PutPartialData : Circuit [] [] tl_a_op_e := Constant 1.
-  Definition Get            : Circuit [] [] tl_a_op_e := Constant 4.
+  Definition PutFullData    := Constant (val_of tl_a_op_e 0).
+  Definition PutPartialData := Constant (val_of tl_a_op_e 1).
+  Definition Get            := Constant (val_of tl_a_op_e 4).
 
   (* typedef enum logic [2:0] { *)
   (*   AccessAck     = 3'h 0, *)
   (*   AccessAckData = 3'h 1 *)
   (* } tl_d_op_e; *)
   Definition tl_d_op_e     := Vec Bit 3.
-  Definition AccessAck     : Circuit [] [] tl_d_op_e := Constant 0.
-  Definition AccessAckData : Circuit [] [] tl_d_op_e := Constant 1.
+  Definition AccessAck     := Constant (val_of tl_d_op_e 0).
+  Definition AccessAckData := Constant (val_of tl_d_op_e 1).
 
   Definition io_req :=
     Bit **          (* write *)
@@ -156,8 +156,8 @@ Section Var.
         (a_opcode == `PutFullData` || a_opcode == `PutPartialData`) in
 
       (* TODO(blaxill): skipping malformed tl packet detection *)
-      let err_internal := `Constant false` in
-      let error_i := `Constant false` in
+      let err_internal := `Constant (val_of Bit false)` in
+      let error_i := `Constant (val_of Bit false)` in
 
       let '(reqid, reqsz, rspop, error; outstanding) :=
         if a_ack then
@@ -165,17 +165,18 @@ Section Var.
           , a_size
           , if rd_req then `AccessAckData` else `AccessAck`
           , error_i || err_internal
-          , `Constant false`
+          , `Constant (val_of Bit false)`
           )
         else
-          (reqid, reqsz, rspop, error, if d_ack then `Constant false` else outstanding)
+          (reqid, reqsz, rspop, error, if d_ack then `Constant (val_of Bit false)` else outstanding)
       in
 
       let we_o := wr_req && !err_internal in
       let re_o := rd_req && !err_internal in
 
       (reqid, reqsz, rspop, error, outstanding, we_o, re_o)
-      initially (0,(0,(0,(false,(false,(false,false))))))
+      initially (val_of (BitVec _ ** BitVec _ ** BitVec _ ** Bit ** Bit ** Bit ** Bit)
+                        (0,(0,(0,(false,(false,(false,false)))))))
     in
 
     let wdata_o := a_data in
@@ -183,12 +184,12 @@ Section Var.
 
     ( ( outstanding
       , rspop
-      , `Constant 0`
+      , `Constant (val_of (BitVec _) 0)`
       , reqsz
       , reqid
-      , `Constant 0`
+      , `Constant (val_of (BitVec _) 0)`
       , `index` registers (`slice 2 30` a_address)
-      , `Constant 0`
+      , `Constant (val_of (BitVec _) 0)`
       , error
       , !outstanding
       )
