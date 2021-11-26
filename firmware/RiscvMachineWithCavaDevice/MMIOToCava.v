@@ -27,32 +27,33 @@ Class device_implements_state_machine{word: word.word 32}{mem: map.map word Byte
   mmioAddrs_match: sameset state_machine.isMMIOAddr device.isMMIOAddr;
 
   (* simulation relation between high-level states sH and low-level states sL *)
-  device_state_related: state_machine.state -> D -> Prop;
+  device_state_related: state_machine.state -> D -> list tl_h2d -> Prop;
 
   (* if an initial high-level state is related to some low-level state, it must be a ready state *)
   initial_state_is_ready_state: forall sH sL,
       state_machine.is_initial_state sH ->
-      device_state_related sH sL ->
+      device_state_related sH sL [] ->
       device.is_ready_state sL;
 
   (* every initial high-level state is related to every initial low-level state *)
   initial_states_are_related: forall sH sL,
       state_machine.is_initial_state sH ->
       device.is_ready_state sL ->
-      device_state_related sH sL;
+      device_state_related sH sL [];
 
   (* for every initial low-level state, there exists a related initial high-level state *)
   initial_state_exists: forall sL,
       device.is_ready_state sL ->
-      exists sH, state_machine.is_initial_state sH /\ device_state_related sH sL;
+      exists sH, state_machine.is_initial_state sH /\ device_state_related sH sL [];
 
   (* transitions that are not responding to MMIO cannot change the state as seen by the software: *)
   nonMMIO_device_step_preserves_state_machine_state:
-    forall sL1 sL2 sH h2d ignored_resp,
+    forall sL1 sL2 sH h2d,
       a_valid h2d = false ->
-      device_state_related sH sL1 ->
-      device.run1 sL1 h2d = (sL2, ignored_resp) ->
-      device_state_related sH sL2;
+      (* d_ready h2d = false -> *)
+      device_state_related sH sL1 [] ->
+      device.run1 sL1 h2d = sL2 ->
+      device_state_related sH sL2 [];
 
   (* for each high-level state sH from which n bytes can be read at register r,
      if we run the low-level device with the read step's address on the input wires,
@@ -61,22 +62,42 @@ Class device_implements_state_machine{word: word.word 32}{mem: map.map word Byte
      we will get a response matching some possible high-level read step's response,
      but not necessarily the one we used to show that sH accepts reads (to allow
      underspecification-nondeterminism in the high-level state machine) *)
-  state_machine_read_to_device_read_or_later: forall log2_nbytes r sH sL sL' h2d d2h,
+
+  (* TODO: replace the length clauses with [In (a_source h2d) (device.tl_inflight_ops sL)] *)
+  state_machine_read_to_device_send_read_or_later: forall log2_nbytes r sH sL sL' h2d,
       (exists v sH', state_machine.read_step (2 ^ log2_nbytes) sH r v sH') ->
-      device_state_related sH sL ->
+      device_state_related sH sL [] ->
       a_valid h2d = true ->
       a_opcode h2d = Get ->
       a_size h2d = N.of_nat log2_nbytes ->
       a_address h2d = word_to_N (state_machine.reg_addr r) ->
       d_ready h2d = true ->
-      device.run1 sL h2d = (sL', d2h) ->
-      if d_valid d2h then
-        exists sH',
-          device_state_related sH' sL' /\
-          state_machine.read_step (2 ^ log2_nbytes) sH r (N_to_word (d_data d2h)) sH'
+      device.run1 sL h2d = sL' ->
+      if a_ready (device.last_d2h sL) then
+        if d_valid (device.last_d2h sL') then
+          exists sH',
+            device_state_related sH' sL' [] /\
+            state_machine.read_step (2 ^ log2_nbytes) sH r (N_to_word (d_data (device.last_d2h sL'))) sH'
+        else
+          device_state_related sH sL' [h2d] /\
+          (device.maxRespDelay sL' < device.maxRespDelay sL)%nat
       else
-        device_state_related sH sL' /\
-        (device.maxRespDelay sL' h2d < device.maxRespDelay sL h2d)%nat;
+        device_state_related sH sL' [] /\
+        (device.maxRespDelay sL' < device.maxRespDelay sL)%nat;
+
+  state_machine_read_to_device_ack_read_or_later: forall log2_nbytes r sH sL sL' h2d,
+      (exists v sH', state_machine.read_step (2 ^ log2_nbytes) sH r v sH') ->
+      device_state_related sH sL [h2d] ->
+      a_opcode h2d = Get ->
+      a_address h2d = word_to_N (state_machine.reg_addr r) ->
+      device.run1 sL (set_d_ready true tl_h2d_default) = sL' ->
+      if d_valid (device.last_d2h sL') then
+        exists sH',
+          device_state_related sH' sL' [] /\
+          state_machine.read_step (2 ^ log2_nbytes) sH r (N_to_word (d_data (device.last_d2h sL'))) sH'
+      else
+        device_state_related sH sL' [h2d] /\
+        (device.maxRespDelay sL' < device.maxRespDelay sL)%nat;
 
   (* for each high-level state sH in which an n-byte write to register r with value v is possible,
      if we run the low-level device with the write step's address and value on the input wires,
@@ -85,23 +106,42 @@ Class device_implements_state_machine{word: word.word 32}{mem: map.map word Byte
      we will get an ack response and the device will end up in a state corresponding to a
      high-level state reached after a high-level write, but not necessarily in the state
      we used to show that sH accepts writes *)
-  state_machine_write_to_device_write_or_later: forall log2_nbytes r v sH sL sL' h2d d2h,
+  state_machine_write_to_device_send_write_or_later: forall log2_nbytes r v sH sL sL' h2d,
       (exists sH', state_machine.write_step (2 ^ log2_nbytes) sH r v sH') ->
-      device_state_related sH sL ->
+      device_state_related sH sL [] ->
       a_valid h2d = true ->
       a_opcode h2d = PutFullData ->
       a_size h2d = N.of_nat log2_nbytes ->
       a_address h2d = word_to_N (state_machine.reg_addr r) ->
       a_data h2d = word_to_N v ->
       d_ready h2d = true ->
-      device.run1 sL h2d = (sL', d2h) ->
-      if d_valid d2h then
+      device.run1 sL h2d = sL' ->
+      if a_ready (device.last_d2h sL) then
+        if d_valid (device.last_d2h sL') then
+          exists sH',
+            device_state_related sH' sL' [] /\
+            state_machine.write_step (2 ^ log2_nbytes) sH r v sH'
+        else
+          device_state_related sH sL' [h2d] /\
+          (device.maxRespDelay sL' < device.maxRespDelay sL)%nat
+      else
+        device_state_related sH sL' [] /\
+        (device.maxRespDelay sL' < device.maxRespDelay sL)%nat;
+
+  state_machine_write_to_device_ack_write_or_later: forall log2_nbytes r v sH sL sL' h2d,
+      (exists sH', state_machine.write_step (2 ^ log2_nbytes) sH r v sH') ->
+      device_state_related sH sL [h2d] ->
+      a_opcode h2d = PutFullData ->
+      a_address h2d = word_to_N (state_machine.reg_addr r) ->
+      a_data h2d = word_to_N v ->
+      device.run1 sL (set_d_ready true tl_h2d_default) = sL' ->
+      if d_valid (device.last_d2h sL') then
         exists sH',
-          device_state_related sH' sL' /\
+          device_state_related sH' sL' [] /\
           state_machine.write_step (2 ^ log2_nbytes) sH r v sH'
       else
-        device_state_related sH sL' /\
-        (device.maxRespDelay sL' h2d < device.maxRespDelay sL h2d)%nat;
+        device_state_related sH sL' [h2d] /\
+        (device.maxRespDelay sL' < device.maxRespDelay sL)%nat;
 
   (* If two steps starting in the same high-level state agree on what gets appended to the trace,
      then the resulting high-level states must be equal.
@@ -138,37 +178,119 @@ Section WithParams.
      and the response will match some possible high-level read step's response,
      but not necessarily the one we used to show that sH accepts reads (to allow
      underspecification-nondeterminism in the high-level state machine) *)
+  Lemma state_machine_read_to_device_ack_read: forall log2_nbytes r sH sL h2d,
+      (exists v sH', state_machine.read_step (2 ^ log2_nbytes) sH r v sH') ->
+      device_state_related sH sL [h2d] ->
+      a_opcode h2d = Get ->
+      a_address h2d = word_to_N (state_machine.reg_addr r) ->
+      exists d2h sL' sH',
+        device.waitForResp (device.maxRespDelay sL) sL = (Some d2h, sL') /\
+        device_state_related sH' sL' [] /\
+        state_machine.read_step (2 ^ log2_nbytes) sH r (N_to_word (d_data d2h)) sH'.
+  Proof.
+    intros. remember (device.maxRespDelay sL) as fuel.
+    remember (S fuel) as B.
+    assert (device.maxRespDelay sL <= fuel < B)%nat as HB by lia.
+    clear HeqB Heqfuel.
+    revert fuel sH sL H H0 H1 HB.
+    induction B; intros.
+    - exfalso. lia.
+    - remember (device.run1 sL (set_d_ready true tl_h2d_default)) as sL' eqn:E.
+      apply eq_sym in E.
+      destr fuel; cbn [device.waitForResp];
+        pose proof (state_machine_read_to_device_ack_read_or_later
+                      _ _ _ _ _ _ H H0 H1 H2 E) as P; rewrite E in *;
+        (destruct_one_match; [destruct P as (sH' & R & V); eauto 10 |
+                              destruct P as (R & Decl)]).
+      + exfalso. lia.
+      + edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St);
+          try eassumption. 2: eauto 10. lia.
+  Qed.
+
+  Lemma state_machine_write_to_device_ack_write: forall log2_nbytes r v sH sL h2d,
+      (exists sH', state_machine.write_step (2 ^ log2_nbytes) sH r v sH') ->
+      device_state_related sH sL [h2d] ->
+      a_opcode h2d = PutFullData ->
+      a_address h2d = word_to_N (state_machine.reg_addr r) ->
+      a_data h2d = word_to_N v ->
+      exists d2h sL' sH',
+        device.waitForResp (device.maxRespDelay sL) sL = (Some d2h, sL') /\
+        device_state_related sH' sL' [] /\
+        state_machine.write_step (2 ^ log2_nbytes) sH r v sH'.
+  Proof.
+    intros. remember (device.maxRespDelay sL) as fuel.
+    remember (S fuel) as B.
+    assert (device.maxRespDelay sL <= fuel < B)%nat as HB by lia.
+    clear HeqB Heqfuel.
+    revert fuel sH sL H H0 HB.
+    induction B; intros.
+    - exfalso. lia.
+    - remember (device.run1 sL (set_d_ready true tl_h2d_default)) as sL' eqn:E.
+      apply eq_sym in E.
+      destr fuel; cbn [device.waitForResp];
+        pose proof (state_machine_write_to_device_ack_write_or_later
+                      _ _ _ _ _ _ _ H H0 H1 H2 H3 E) as P; rewrite E in *;
+        (destruct_one_match; [destruct P as (sH' & R & V); eauto 10 |
+                              destruct P as (R & Decl)]).
+      + exfalso. lia.
+      + edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St);
+          try eassumption. 2: eauto 10. lia.
+  Qed.
+
+  Lemma waitForResp_mono : forall (fuel fuel' : nat) s d2h s',
+      (fuel <= fuel')%nat ->
+      device.waitForResp fuel s = (Some d2h, s') ->
+      device.waitForResp fuel' s = (Some d2h, s').
+  Proof.
+    intros ? ?. revert fuel. induction fuel'; intros; inversion H; subst; auto.
+    cbn [device.waitForResp].
+    destruct_one_match; destruct fuel;
+      cbn [device.waitForResp] in H0; rewrite E in H0;
+        try assumption; try discriminate.
+    eapply IHfuel' with (fuel:=fuel); [lia|auto].
+  Qed.
+
   Lemma state_machine_read_to_device_read: forall log2_nbytes r sH sL h2d,
       (exists v sH', state_machine.read_step (2 ^ log2_nbytes) sH r v sH') ->
-      device_state_related sH sL ->
+      device_state_related sH sL [] ->
       a_valid h2d = true ->
       a_opcode h2d = Get ->
       a_size h2d = N.of_nat log2_nbytes ->
       a_address h2d = word_to_N (state_machine.reg_addr r) ->
       d_ready h2d = true ->
       exists d2h sL' sH',
-        device.runUntilResp h2d (device.maxRespDelay sL h2d) sL = (Some d2h, sL') /\
-        device_state_related sH' sL' /\
+        device.runUntilResp h2d (device.maxRespDelay sL) sL = (Some d2h, sL') /\
+        device_state_related sH' sL' [] /\
         state_machine.read_step (2 ^ log2_nbytes) sH r (N_to_word (d_data d2h)) sH'.
   Proof.
-    intros. remember (device.maxRespDelay sL h2d) as fuel. remember (S fuel) as B.
-    assert (device.maxRespDelay sL h2d <= fuel < B)%nat as HB by lia. clear HeqB Heqfuel.
+    intros. remember (device.maxRespDelay sL) as fuel. remember (S fuel) as B.
+    assert (device.maxRespDelay sL <= fuel < B)%nat as HB by lia. clear HeqB Heqfuel.
     revert fuel sH sL H H0 HB.
     induction B; intros.
     - exfalso. lia.
-    - destr fuel; cbn [device.runUntilResp]; destruct_one_match;
-        pose proof (state_machine_read_to_device_read_or_later
-                      _ _ _ _ _ _ _ H H0 H1 H2 H3 H4 H5 E) as P;
-        (destruct_one_match; [destruct P as (sH' & R & V) | destruct P as (R & Decr)]).
-      + (* 0 remaining fuel, valid response: *)
-        clear -R V. eauto 10.
-      + (* 0 remaining fuel, no valid response: *)
+    - remember (device.run1 sL h2d) as sL' eqn:E. apply eq_sym in E.
+      destr fuel; cbn [device.runUntilResp];
+        pose proof (state_machine_read_to_device_send_read_or_later
+                      _ _ _ _ _ _ H H0 H1 H2 H3 H4 H5 E) as P;
+        (repeat destruct_one_match; subst; rewrite ? E1 in P;
+         [destruct P as (sH' & R & V) |
+          destruct P as (R & Decr) ..]);
+        rewrite ? E in *.
+      + (* 0 remaining fuel, device ready, valid response: *)
+        eauto 10.
+      + (* 0 remaining fuel, device ready, no valid response: *)
         exfalso. lia.
-      + (* some remaining fuel, valid response: *)
-        clear -R V. eauto 10.
-      + (* some remaining fuel, no valid response *)
-        edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St).
-        1: eassumption. 1: exact R. 2: eauto 10. lia.
+      + (* 0 remaining fuel, device not ready: *)
+        exfalso. lia.
+      + (* some remaining fuel, device ready, valid response: *)
+        eauto 10.
+      + (* some remaining fuel, device ready, no valid response: *)
+        pose proof (state_machine_read_to_device_ack_read
+                      _ _ _ _ _ H R H2 H4) as (d2h & sL'' & sH'' & W' & R' & V').
+        eapply waitForResp_mono in W'. 1: eauto 10. lia.
+      + (* some remaining fuel, device not ready: *)
+        edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St);
+          try eassumption. 2: eauto 10. lia.
   Qed.
 
   (* for each high-level state sH in which an n-byte write to register r with value v is possible,
@@ -178,7 +300,7 @@ Section WithParams.
      a high-level write, but not necessarily in the state we used to show that sH accepts writes *)
   Lemma state_machine_write_to_device_write: forall log2_nbytes r v sH sL h2d,
       (exists sH', state_machine.write_step (2 ^ log2_nbytes) sH r v sH') ->
-      device_state_related sH sL ->
+      device_state_related sH sL [] ->
       a_valid h2d = true ->
       a_opcode h2d = PutFullData ->
       a_size h2d = N.of_nat log2_nbytes ->
@@ -186,34 +308,44 @@ Section WithParams.
       a_data h2d = word_to_N v ->
       d_ready h2d = true ->
       exists ignored sL' sH',
-        device.runUntilResp h2d (device.maxRespDelay sL h2d) sL = (Some ignored, sL') /\
-        device_state_related sH' sL' /\
+        device.runUntilResp h2d (device.maxRespDelay sL) sL = (Some ignored, sL') /\
+        device_state_related sH' sL' [] /\
         state_machine.write_step (2 ^ log2_nbytes) sH r v sH'.
   Proof.
-    intros. remember (device.maxRespDelay sL h2d) as fuel. remember (S fuel) as B.
-    assert (device.maxRespDelay sL h2d <= fuel < B)%nat as HB by lia. clear HeqB Heqfuel.
+    intros. remember (device.maxRespDelay sL) as fuel. remember (S fuel) as B.
+    assert (device.maxRespDelay sL <= fuel < B)%nat as HB by lia. clear HeqB Heqfuel.
     revert fuel sH sL H H0 HB.
     induction B; intros.
     - exfalso. lia.
-    - destr fuel; cbn [device.runUntilResp]; destruct_one_match;
-        pose proof (state_machine_write_to_device_write_or_later
-                      _ _ _ _ _ _ _ _ H H0 H1 H2 H3 H4 H5 H6 E) as P;
-        (destruct_one_match; [destruct P as (sH' & R & V) | destruct P as (R & Decr)]).
-      + (* 0 remaining fuel, valid response: *)
-        clear -R V. eauto 10.
-      + (* 0 remaining fuel, no valid response: *)
+    - remember (device.run1 sL h2d) as sL' eqn:E. apply eq_sym in E.
+      destr fuel; cbn [device.runUntilResp];
+        pose proof (state_machine_write_to_device_send_write_or_later
+                      _ _ _ _ _ _ _ H H0 H1 H2 H3 H4 H5 H6 E) as P;
+        (repeat destruct_one_match; subst; rewrite ? E1 in P;
+         [destruct P as (sH' & R & V) |
+          destruct P as (R & Decr) ..]);
+        rewrite ? E in *.
+      + (* 0 remaining fuel, device ready, valid response: *)
+        eauto 10.
+      + (* 0 remaining fuel, device ready, no valid response: *)
         exfalso. lia.
-      + (* some remaining fuel, valid response: *)
+      + (* 0 remaining fuel, device not ready: *)
+        exfalso. lia.
+      + (* some remaining fuel, device ready, valid response: *)
         clear -R V. eauto 10.
-      + (* some remaining fuel, no valid response *)
-        edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St).
-        1: eassumption. 1: exact R. 2: eauto 10. lia.
+      + (* some remaining fuel, device ready, no valid response: *)
+        pose proof (state_machine_write_to_device_ack_write
+                      _ _ _ _ _ _ H R H2 H4 H5) as (d2h & sL'' & sH'' & W' & R' & V').
+        eapply waitForResp_mono in W'. 1: eauto 10. lia.
+      + (* some remaining fuel, device not ready *)
+        edestruct IHB as (d2h & sL'' & sH'' & Run & Rel & St);
+          try eassumption. 2: eauto 10. lia.
   Qed.
 
   Inductive related: MetricRiscvMachine -> ExtraRiscvMachine D -> Prop :=
     mkRelated: forall regs pc npc m xAddrs (t: list LogItem) t_ignored mc d s,
       execution t s ->
-      device_state_related s d ->
+      device_state_related s d [] ->
       map.undef_on m state_machine.isMMIOAddr ->
       disjoint (of_list xAddrs) state_machine.isMMIOAddr ->
       related
@@ -449,7 +581,7 @@ Section WithParams.
                          change n at 1 with (2 ^ (Nat.log2 n))%nat in H
                        end; eassumption
              |eassumption
-             |rewrite ? Z_word_N in * by lia; try reflexivity..]
+             |rewrite ? Z_word_N in * by lia; reflexivity..|]
          end.
     1-3: cbn -[HList.tuple Primitives.invalidateWrittenXAddrs];
       tlsimpl; simpl in RU; rewrite RU;
@@ -495,13 +627,8 @@ Section WithParams.
       unfold device_step_without_IO.
       eapply mkRelated.
       + eassumption.
-      + match goal with
-        | |- context[let '(_, _) := ?p in _] => destruct p eqn: E
-        end.
-        eapply nonMMIO_device_step_preserves_state_machine_state. 2: eassumption.
-        1: instantiate (1 := tl_h2d_default); reflexivity.
-        simpl.
-        exact E.
+      + eapply nonMMIO_device_step_preserves_state_machine_state;
+          [..|reflexivity]; auto.
       + assumption.
       + assumption.
   Qed.
